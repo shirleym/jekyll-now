@@ -9,7 +9,7 @@ date: 2018-02-19
 Quagga Installation and Configuration: Ubuntu Server 16.04(rtr and int-rtr)
 
 
-![Architecture](/assets/cnlab.jpg){:class="img-responsive"}
+![Architecture](/images/cnlab.jpg){:class="img-responsive"}
 
 
 Sudo apt-get install quagga
