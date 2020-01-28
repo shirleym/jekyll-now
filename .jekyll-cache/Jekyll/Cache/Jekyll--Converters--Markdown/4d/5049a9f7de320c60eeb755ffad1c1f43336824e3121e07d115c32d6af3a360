@@ -1,0 +1,850 @@
+I"7�<p>Introduction:</p>
+
+<p>This firewall is built on a linux machine which comprises of a netfilter framework . Netfilter is a packet filtering system within the system and provides a series of 5 hooks over different points of the kernel network stack. Kernel module functions or userspace functions can be registered against these hooks and can be used to pass a decision on the traversal of the packet.</p>
+
+<p>Here we have transferred all packets to userspace using iptables and nfqueue.The running code registered against respective queue number will pass a verdict on the packets.</p>
+
+<p>Netfilter Architecture:</p>
+
+<p><img src="/images/netfilter_arch.PNG" alt="Architecture" class="img-responsive" /></p>
+
+<p>An incoming IP packet travels in the path shown in the figure. It passes through hooks where different functions (dropping, mangling, etc) to exploit these packets can be defined. Initially the packet passes through NF_IP_PRE_ROUTING hook after which it passes through routing code which decided whether it is meant for a local process or to another machine.If it’s for the current machine, then netfilter framework is called for the NF_IP_LOCAL_IN hook before being passed to local process. If not for this machine, then it’s passed on to the NF_IP_FORWARD hook and finally to NF_IP_POST_ROUTING hook. The hooks are triggered by the kernel after implementation of network procedures.
+Kernel modules can register a new table of iptables and ask for a packet to traverse a given table. Several tables of iptables hook onto the NF_IP_LOCAL_IN,NF_IP_FORWARD and NF_IP_LOCAL_OUT points. Netfilter provides a special target in iptables called nfqueue to register user programs for these hooks. Incoming packets get queued to these and are served by the programs. One program can bind to one or several queues using libnetfilter_queue library.  This library can receive queued packets from kernel nfnetlink_queue subsystem, issue verdicts and reinject altered packets to nfnetlink_queue.</p>
+
+<p>Firewall Capabilities include:
+1.Flow-level classification
+2.Pattern matching
+3.Stateful Inspection</p>
+
+<p>Lab Scenario:</p>
+
+<p>Setup:</p>
+
+<p><img src="/images/VM_setup.PNG" alt="VM_setup" class="img-responsive" /></p>
+
+<p>Here we use VM1 and VM2 as two guests on two different physical desktop machines, and each running on a VirtualBox. FW is the virtual firewall running as guest VM which behaves as router and forwards traffic between the hosts VM1 and VM2.</p>
+
+<p>Network Configuration:</p>
+
+<p><img src="/images/network_config.PNG" alt="network_config" class="img-responsive" /></p>
+
+<p>FW:
+Adapter1: A bridged adapter so that it receives IP from the host’s wifi network.
+Adapter2: An internal network adapter so that it can communicate with the VM1, which we call the LAN network
+Use VirtualBox’s VBoxManage to setup a dhcp server so that the FW and VM1 can get IP address on the internal network. In the following example, we use “intnet” as internal network.</p>
+
+<p><img src="/images/command1.PNG" alt="command1" class="img-responsive" /></p>
+
+<p>VM1:
+Adapter1: An internal network adapter same as FW.</p>
+
+<p>VM2:
+Adapter1: A bridged adapter that receives IP from the host’s wifi network.</p>
+
+<p>Then start the respective VMs.
+Once the VMs are started, check if the interfaces on the VMs get IP address. If not manually add entries to /etc/network/interfaces file to get IP from dhcp and then reboot.</p>
+
+<p><img src="/images/interface_file.PNG" alt="interface_file" class="img-responsive" /></p>
+
+<p>Routing:
+To enable forwarding on FW, that is to forward packets from one network card to another. We run the following command in the VM terminal.</p>
+
+<p><img src="/images/command2.PNG" alt="command2" /></p>
+
+<p>However the VM2 and VM1 cannot communicate with each other. Hence we need to setup a static route on both so that the traffic between them passes through FW.</p>
+
+<p>For eg:
+VM2 connected over WiFi:</p>
+
+<p><img src="/images/Command3.PNG" alt="Command3" /></p>
+
+<p>VM1 on internal network:</p>
+
+<p><img src="/images/Command4.PNG" alt="Command4" /></p>
+
+<p>Once the static routes are added, make sure VM1 and VM2 can ping each other before adding any iptables rule.</p>
+
+<p>Packages to be installed on FW for Netfilter’s NFQUEUE and CONNTRACK modules to interact with the kernel.
+Sudo apt-get install libnetfilter-queue-dev
+Sudo apt-get install libnetfilter-conntrack-dev</p>
+
+<p>Iptables rule to be added on FW to pass traffic on the forward hook to the NFQUEUE</p>
+
+<p><img src="/images/Command5.PNG" alt="Command5" /></p>
+
+<p>Add the same rule in the reverse direction as well.</p>
+
+<p>Rule Table on FW :
+Example based on Lab2 Scenarios: “rules.txt”</p>
+
+<p><img src="/images/rules.PNG" alt="rules" /></p>
+
+<p>Compile the code:
+<img src="/images/Command6.PNG" alt="Command6" /></p>
+
+<p>Running the code:
+Note: Make sure rules.txt is in same directory as the source code before running the code.</p>
+
+<p><img src="/images/command7.PNG" alt="command7" /></p>
+
+<p>Rules Tested:</p>
+<ol>
+  <li>Allow Ping from the Lan interface to the Wifi interface. (Flow level classification). Verify your settings:
+ping 192.168.1.100 from 192.168.0.21 Should get through</li>
+</ol>
+
+<p><img src="/images/rules2.PNG" alt="rules2" /></p>
+
+<p>Note:  The 7th column represents flag/type and here it means ICMP_TYPE, ie echo-request is 8 and icmp-reply is 0</p>
+
+<ol>
+  <li>Drop TCP with destination address and port 192.168.1.100:5000. Allow TCP connection setup with destination 192.168.1.100:5001-5010. (Flow level classification)
+iperf -s -p 5000 &lt;from 192.168.1.100&gt;
+iperf -c 192.168.1.100 -p 5000 &lt;from 192.168.0.21&gt;
+Should get blocked.</li>
+</ol>
+
+<p>iperf -s -p 5001 &lt;from 192.168.1.100&gt;
+iperf -c 192.168.1.100 -p 5001 &lt;from 192.168.0.21&gt;
+Should get through.</p>
+
+<p><img src="/images/rules3.PNG" alt="rules3" /></p>
+
+<ol>
+  <li>Allow ssh services initiated from LAN to wifi. Deny ssh services initiated from firewall to LAN (Stateful firewall rules).
+Verify your settings: ssh <your username="">@192.168.0.21    &lt;from 192.168.1.100&gt;.Should get successfully accessed.
+Verify your settings: ssh <your username="">@192.168.1.100    &lt;from 192.168.0.21&gt;. Should get stuck.</your></your></li>
+</ol>
+
+<p><img src="/images/rules4.PNG" alt="rules4" /></p>
+
+<p>Note: The second-last says this rule expects stateful inspection, and the last column represents the tcp states allowed. For eg: for NEW state, the tcp states allowed are from NONE(0),SYN_SENT(1),SYN_RECV(2)</p>
+
+<p><img src="/images/states.PNG" alt="states" /></p>
+
+<ol>
+  <li>Drop SYN-ACK packets destine to 192.168.1.100:10000. Allow SYN and ACK packets destine to 192.168.1.100:10000 (Packet level classification).
+Verify your settings:
+Use hping3 http://www.hping.org/manpage.html
+Or scapy http://www.secdev.org/projects/scapy/doc/usage.html
+to send an individual SYN/SYN-ACK/ACK packet to 192.168.0.21. The SYN-ACK should get dropped while the SYN/ACK should get through.</li>
+</ol>
+
+<p><img src="/images/rules5.PNG" alt="rules5" /></p>
+
+<p>Note: An iperf server was started at the destination with port 10000 to observe syn-ack packets being blocked, i.e; when a syn packet is sent to port 10000, the port replies with syn-ack but the packet is blocked by firewall. Just sending a syn-ack packet without running a tcp server at destination will not block syn-ack packet and a reset packet is received at the sending host.</p>
+
+<ol>
+  <li>Block a FTP transmission file bidirectional containing the word “piratebay”. Allow other FTP transmission. (String matching)
+Follow https://help.ubuntu.com/lts/serverguide/ftp-server.html or other opensource FTP server (with no encryption) to setup a ftp at 192.168.1.100. Transmit a txt file from 192.168.0.21 to 192.168.1.100 using FTP containing “piratebay”.
+Suppose the txt file contains “piratebay”, an empty file gets transferred. Otherwise the file should be successfully transmitted.</li>
+</ol>
+
+<p><img src="/images/rules6.PNG" alt="rules6" /></p>
+
+<p>Note: When a file without the pattern is being transferred, the file gets transferred successfully to destination. However, if a file with the pattern piratebay is being transferred, we apply the pattern action i.e NF_DROP in this case, and the connection is stuck and an empty file is created at destination.</p>
+
+<ol>
+  <li>Deny any other packets (Default Policy)
+By default any packet that does not match any rule in the file rules.txt, will be dropped.</li>
+</ol>
+
+<p>Code:netfil_m.c
+Rules:rules.txt</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c"><span class="c1">//Libraries</span>
+<span class="cp">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;string.h&gt;
+#include &lt;netinet/in.h&gt;
+#include &lt;linux/types.h&gt;
+#include &lt;linux/netfilter.h&gt;
+#include &lt;linux/ip.h&gt;
+#include &lt;linux/tcp.h&gt;
+#include &lt;linux/udp.h&gt;
+#include &lt;linux/icmp.h&gt;
+#include &lt;arpa/inet.h&gt;
+#include &lt;libnetfilter_queue/libnetfilter_queue.h&gt;
+#include &lt;libnetfilter_conntrack/libnetfilter_conntrack.h&gt;
+#include &lt;libnetfilter_conntrack/libnetfilter_conntrack_tcp.h&gt;
+#include &lt;errno.h&gt;
+</span>
+<span class="c1">//ip protocol values</span>
+<span class="cp">#define ICMP 1
+#define TCP 6
+#define UDP 17
+</span>
+<span class="c1">//structure to store rules</span>
+<span class="k">struct</span> <span class="n">rule</span> <span class="p">{</span>
+    <span class="kt">char</span> <span class="n">s_addr</span><span class="p">[</span><span class="mi">32</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">d_addr</span><span class="p">[</span><span class="mi">32</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">s_port_start</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">s_port_end</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">d_port_start</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">d_port_end</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">flags</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">proto</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">action</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">signature</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">signature_action</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">stateful</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="n">states</span><span class="p">[</span><span class="mi">2</span><span class="p">][</span><span class="mi">10</span><span class="p">];</span>
+
+<span class="p">};</span>
+
+<span class="c1">//declare an array for rules</span>
+<span class="k">struct</span> <span class="n">rule</span> <span class="n">rules</span><span class="p">[</span><span class="mi">20</span><span class="p">];</span>
+<span class="c1">//global value to store total rules</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="n">rule_count</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+<span class="c1">//define structure for network address type: ip/prefix</span>
+<span class="k">typedef</span> <span class="k">struct</span> <span class="n">network_addr</span> <span class="p">{</span>
+    <span class="kt">char</span> <span class="o">*</span><span class="n">addr</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">pfx</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">network_addr_t</span><span class="p">;</span>
+
+
+<span class="c1">//TCP STATES, 0:3(NEW), 4:9(ESTABLISHED)</span>
+<span class="k">enum</span> <span class="n">states</span><span class="p">{</span>
+	<span class="n">NONE</span><span class="p">,</span>
+	<span class="n">SYN_SENT</span><span class="p">,</span>
+	<span class="n">SYN_RECV</span><span class="p">,</span>
+	<span class="n">ESTABLISHED</span><span class="p">,</span>
+	<span class="n">FIN_WAIT</span><span class="p">,</span>
+	<span class="n">CLOSE_WAIT</span><span class="p">,</span>
+	<span class="n">LAST_ACK</span><span class="p">,</span>
+	<span class="n">TIME_WAIT</span><span class="p">,</span>
+	<span class="n">CLOSE</span><span class="p">,</span>
+	<span class="n">LISTEN</span>
+<span class="p">};</span>
+
+<span class="c1">//function to read rules from rules.txt</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">read_rules</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="kt">FILE</span><span class="o">*</span> <span class="n">file</span> <span class="o">=</span> <span class="n">fopen</span><span class="p">(</span><span class="s">"rules.txt"</span><span class="p">,</span><span class="s">"r"</span><span class="p">);</span>
+    <span class="kt">char</span> <span class="n">buf</span><span class="p">[</span><span class="mi">256</span><span class="p">];</span>
+    <span class="kt">char</span> <span class="o">*</span><span class="n">ptr</span><span class="p">;</span>
+    <span class="k">while</span><span class="p">(</span><span class="n">fscanf</span><span class="p">(</span><span class="n">file</span><span class="p">,</span><span class="s">"%s %s %s %s %s %s %s %s %s %s %s %s %[^:]:%[^:</span><span class="se">\n</span><span class="s">]"</span><span class="p">,</span> <span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">s_addr</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">d_addr</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">s_port_start</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">s_port_end</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">d_port_start</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">d_port_end</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">flags</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">proto</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">action</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">signature</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">signature_action</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">stateful</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">states</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">states</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">==</span> <span class="mi">14</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">//print rules</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">rule : %s %s %s %s %s %s %s %s %s %s %s %s %s %s"</span><span class="p">,</span> <span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">s_addr</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">d_addr</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">s_port_start</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">s_port_end</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">d_port_start</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">d_port_end</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">flags</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">proto</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">action</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">signature</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">signature_action</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">stateful</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">states</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="n">rules</span><span class="p">[</span><span class="n">rule_count</span><span class="p">].</span><span class="n">states</span><span class="p">[</span><span class="mi">1</span><span class="p">]);</span>
+        <span class="c1">//printf("\n****string port ranges****%s,%s ----- %s,%s", rules[rule_count].s_port_start,rules[rule_count].s_port_end,rules[rule_count].d_port_start,rules[rule_count].d_port_end);</span>
+
+        <span class="n">rule_count</span><span class="o">++</span><span class="p">;</span><span class="c1">//update total rule_count</span>
+    <span class="p">}</span>
+    <span class="c1">//check if ed of file reached</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">feof</span><span class="p">(</span><span class="n">file</span><span class="p">))</span>
+    <span class="p">{</span>   <span class="n">puts</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">EOF"</span><span class="p">);</span>
+        <span class="n">fclose</span><span class="p">(</span><span class="n">file</span><span class="p">);</span>
+        <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+        <span class="n">fclose</span><span class="p">(</span><span class="n">file</span><span class="p">);</span>
+        <span class="n">puts</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">can not read"</span><span class="p">);</span>
+        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="n">fclose</span><span class="p">(</span><span class="n">file</span><span class="p">);</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">//function to calculate netmask</span>
+<span class="n">u_int32_t</span> <span class="nf">compute_netmask</span><span class="p">(</span><span class="kt">int</span> <span class="n">prefix</span><span class="p">,</span> <span class="n">u_int32_t</span> <span class="n">netmask</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">prefix:%d"</span><span class="p">,</span><span class="n">prefix</span><span class="p">);</span>
+    <span class="n">u_int32_t</span> <span class="n">mask</span> <span class="o">=</span> <span class="mh">0xFFFFFFFF</span><span class="p">;</span>
+    <span class="n">mask</span> <span class="o">&lt;&lt;=</span> <span class="p">(</span><span class="mi">32</span> <span class="o">-</span> <span class="n">prefix</span><span class="p">);</span>
+    <span class="n">netmask</span> <span class="o">=</span> <span class="n">ntohl</span><span class="p">(</span><span class="n">mask</span><span class="p">);</span>
+    <span class="k">return</span> <span class="n">netmask</span><span class="p">;</span>
+
+<span class="p">}</span>
+
+<span class="c1">//function to split string ip/prefix</span>
+<span class="n">network_addr_t</span> <span class="nf">get_ip</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">listed_ip</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">char</span> <span class="o">*</span><span class="n">input</span> <span class="o">=</span> <span class="s">"/"</span><span class="p">;</span>
+    <span class="kt">char</span> <span class="o">*</span><span class="n">ipv4</span> <span class="o">=</span> <span class="n">strtok</span><span class="p">(</span><span class="n">listed_ip</span><span class="p">,</span><span class="n">input</span><span class="p">);</span>
+    <span class="n">network_addr_t</span> <span class="n">netaddr</span><span class="p">;</span>
+    <span class="n">netaddr</span><span class="p">.</span><span class="n">addr</span> <span class="o">=</span> <span class="n">ipv4</span><span class="p">;</span>
+    <span class="n">ipv4</span> <span class="o">=</span> <span class="n">strtok</span><span class="p">(</span><span class="nb">NULL</span><span class="p">,</span> <span class="s">"/"</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">ipv4</span> <span class="o">!=</span> <span class="nb">NULL</span><span class="p">)</span>
+        <span class="n">netaddr</span><span class="p">.</span><span class="n">pfx</span> <span class="o">=</span> <span class="n">atoi</span><span class="p">(</span><span class="n">ipv4</span><span class="p">);</span>
+    <span class="k">else</span>
+        <span class="n">netaddr</span><span class="p">.</span><span class="n">pfx</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="k">return</span> <span class="n">netaddr</span><span class="p">;</span>
+<span class="p">}</span>
+
+
+<span class="c1">//function to compare string IP addresses</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">compare_ips</span><span class="p">(</span><span class="kt">char</span> <span class="n">listed_ip</span><span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="kt">char</span> <span class="o">*</span><span class="n">packet_ip</span><span class="p">)</span> <span class="p">{</span>
+    <span class="c1">//printf("%s","**************function to compare ips**************");</span>
+    <span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span><span class="n">match</span><span class="p">;</span>    
+    <span class="kt">char</span> <span class="n">str1</span><span class="p">[</span><span class="n">INET_ADDRSTRLEN</span><span class="p">],</span><span class="n">str2</span><span class="p">[</span><span class="n">INET_ADDRSTRLEN</span><span class="p">],</span><span class="n">str3</span><span class="p">[</span><span class="n">INET_ADDRSTRLEN</span><span class="p">];</span>    
+    <span class="n">u_int32_t</span> <span class="n">listed</span><span class="p">,</span> <span class="n">packet</span><span class="p">,</span> <span class="n">netmask</span><span class="p">,</span> <span class="n">pkt_network</span><span class="p">,</span> <span class="n">netstart</span><span class="p">,</span> <span class="n">netend</span><span class="p">;</span>
+
+    <span class="c1">//check if all ip addresses are allowed</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">listed_ip</span><span class="p">,</span><span class="s">"all"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s"</span><span class="p">,</span><span class="n">listed_ip</span><span class="p">);</span>
+
+    <span class="c1">//split ip/prefix of listed-ip</span>
+    <span class="n">network_addr_t</span> <span class="n">netaddr</span><span class="p">;</span>
+    <span class="n">netaddr</span> <span class="o">=</span> <span class="n">get_ip</span><span class="p">(</span><span class="n">listed_ip</span><span class="p">);</span>    
+
+    <span class="c1">//convert ips to u_int32_t datatype</span>
+    <span class="n">inet_pton</span><span class="p">(</span><span class="n">AF_INET</span><span class="p">,</span><span class="n">netaddr</span><span class="p">.</span><span class="n">addr</span><span class="p">,</span><span class="o">&amp;</span><span class="n">listed</span><span class="p">);</span>
+    <span class="n">inet_pton</span><span class="p">(</span><span class="n">AF_INET</span><span class="p">,</span><span class="n">packet_ip</span><span class="p">,</span><span class="o">&amp;</span><span class="n">packet</span><span class="p">);</span>
+    <span class="c1">//printf("\n%s..........%s\n", netaddr.addr, packet_ip);</span>
+    <span class="c1">//printf("%lu.........%lu\n", (unsigned long)listed, (unsigned long)packet);</span>
+
+    <span class="c1">//get netmask for the listed ip</span>
+    <span class="n">netmask</span> <span class="o">=</span> <span class="n">compute_netmask</span><span class="p">(</span><span class="n">netaddr</span><span class="p">.</span><span class="n">pfx</span><span class="p">,</span><span class="n">netmask</span><span class="p">);</span>
+    <span class="c1">//get ip range</span>
+    <span class="n">netstart</span> <span class="o">=</span> <span class="p">(</span><span class="n">listed</span> <span class="o">&amp;</span> <span class="n">netmask</span><span class="p">);</span>
+    <span class="n">netend</span> <span class="o">=</span> <span class="p">(</span><span class="n">netstart</span> <span class="o">|</span> <span class="o">~</span><span class="n">netmask</span><span class="p">);</span>
+    <span class="c1">//printf("\nip range:%lu.......%lu",(unsigned long)netstart,(unsigned long)netend);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">netmask:%lu"</span><span class="p">,(</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="p">)</span><span class="n">netmask</span><span class="p">);</span>
+
+    <span class="c1">//get packet network based on subnetmask</span>
+    <span class="n">pkt_network</span> <span class="o">=</span> <span class="n">packet</span> <span class="o">&amp;</span> <span class="n">netmask</span><span class="p">;</span>
+    <span class="c1">//printf("\npakt_network:%lu",(unsigned long)pkt_network);</span>
+    <span class="c1">//printf("\nlisted_ntwk:%lu",(unsigned long)(listed &amp; netmask));</span>
+
+    <span class="c1">//print listed ip network-range and mask</span>
+    <span class="n">inet_ntop</span><span class="p">(</span><span class="n">AF_INET</span><span class="p">,</span><span class="o">&amp;</span><span class="n">netstart</span><span class="p">,</span><span class="n">str1</span><span class="p">,</span><span class="n">INET_ADDRSTRLEN</span><span class="p">);</span>
+    <span class="n">inet_ntop</span><span class="p">(</span><span class="n">AF_INET</span><span class="p">,</span><span class="o">&amp;</span><span class="n">netend</span><span class="p">,</span><span class="n">str2</span><span class="p">,</span><span class="n">INET_ADDRSTRLEN</span><span class="p">);</span>
+    <span class="n">inet_ntop</span><span class="p">(</span><span class="n">AF_INET</span><span class="p">,</span><span class="o">&amp;</span><span class="n">netmask</span><span class="p">,</span><span class="n">str3</span><span class="p">,</span><span class="n">INET_ADDRSTRLEN</span><span class="p">);</span>
+    <span class="c1">//printf("\nip start:%s.......ip end:%s........mask%s",str1,str2,str3);</span>
+
+    <span class="c1">//check if ip falls in the listed ip range</span>
+    <span class="n">match</span> <span class="o">=</span> <span class="p">((</span><span class="n">packet</span> <span class="o">&amp;</span> <span class="n">netmask</span><span class="p">)</span> <span class="o">==</span> <span class="p">(</span><span class="n">listed</span> <span class="o">&amp;</span> <span class="n">netmask</span><span class="p">));</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">match</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">//printf("\n%s\n","######### IP ADDRESES MATCH ########\n\n");</span>
+        <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+        <span class="c1">//printf("\n%s\n","######### IP ADDRESS DONT MATCH #########\n\n");</span>
+        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">//define pseudo header struct for checksum calculation</span>
+<span class="k">struct</span> <span class="n">pseudo_header</span> <span class="p">{</span>
+    <span class="n">u_int32_t</span> <span class="n">source_address</span><span class="p">;</span>
+    <span class="n">u_int32_t</span> <span class="n">dest_address</span><span class="p">;</span>
+    <span class="n">u_int8_t</span> <span class="n">placeholder</span><span class="p">;</span>
+    <span class="n">u_int8_t</span> <span class="n">protocol</span><span class="p">;</span>
+    <span class="n">u_int16_t</span> <span class="n">tcp_length</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="c1">//function to compute checksum</span>
+<span class="kt">unsigned</span> <span class="kt">short</span> <span class="nf">csum</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">short</span> <span class="o">*</span><span class="n">ptr</span><span class="p">,</span> <span class="kt">int</span> <span class="n">nbytes</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">register</span> <span class="kt">long</span> <span class="n">sum</span><span class="p">;</span>
+    <span class="kt">unsigned</span> <span class="kt">short</span> <span class="n">oddbyte</span><span class="p">;</span>
+    <span class="k">register</span> <span class="kt">short</span> <span class="n">answer</span><span class="p">;</span>
+
+    <span class="n">sum</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>
+    <span class="k">while</span><span class="p">(</span><span class="n">nbytes</span><span class="o">&gt;</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">sum</span><span class="o">+=*</span><span class="n">ptr</span><span class="o">++</span><span class="p">;</span>
+        <span class="n">nbytes</span><span class="o">-=</span><span class="mi">2</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">nbytes</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">oddbyte</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>
+        <span class="o">*</span><span class="p">((</span><span class="n">u_char</span><span class="o">*</span><span class="p">)</span><span class="o">&amp;</span><span class="n">oddbyte</span><span class="p">)</span><span class="o">=*</span><span class="p">(</span><span class="n">u_char</span><span class="o">*</span><span class="p">)</span><span class="n">ptr</span><span class="p">;</span>
+        <span class="n">sum</span><span class="o">+=</span><span class="n">oddbyte</span><span class="p">;</span>
+    <span class="p">}</span>
+
+    <span class="n">sum</span> <span class="o">=</span> <span class="p">(</span><span class="n">sum</span><span class="o">&gt;&gt;</span><span class="mi">16</span><span class="p">)</span><span class="o">+</span><span class="p">(</span><span class="n">sum</span> <span class="o">&amp;</span> <span class="mh">0xffff</span><span class="p">);</span>
+    <span class="n">sum</span> <span class="o">=</span> <span class="n">sum</span> <span class="o">+</span> <span class="p">(</span><span class="n">sum</span><span class="o">&gt;&gt;</span><span class="mi">16</span><span class="p">);</span>
+    <span class="n">answer</span> <span class="o">=</span> <span class="p">(</span><span class="kt">short</span><span class="p">)</span><span class="o">~</span><span class="n">sum</span><span class="p">;</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">answer</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="c1">//function to send tcp reset packet</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">send_tcp_rst</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">saddr</span><span class="p">,</span><span class="kt">char</span> <span class="o">*</span><span class="n">daddr</span><span class="p">,</span> <span class="kt">int</span> <span class="n">protocol</span><span class="p">,</span> <span class="kt">int</span> <span class="n">sport</span><span class="p">,</span> <span class="kt">int</span> <span class="n">dport</span><span class="p">,</span><span class="k">struct</span> <span class="n">iphdr</span> <span class="o">*</span><span class="n">piph</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="kt">char</span> <span class="o">*</span><span class="n">pd</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">int</span> <span class="n">s</span> <span class="o">=</span> <span class="n">socket</span><span class="p">(</span><span class="n">PF_INET</span><span class="p">,</span><span class="n">SOCK_RAW</span><span class="p">,</span> <span class="n">IPPROTO_TCP</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">s</span> <span class="o">==</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">//socket creation failed</span>
+        <span class="n">perror</span><span class="p">(</span><span class="s">"failed to create socket"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="c1">//packet tcp data</span>
+    <span class="k">struct</span> <span class="n">tcphdr</span> <span class="o">*</span><span class="n">tcpHeader</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span> <span class="o">*</span><span class="p">)(</span><span class="n">pd</span> <span class="o">+</span> <span class="p">(</span><span class="n">piph</span><span class="o">-&gt;</span><span class="n">ihl</span><span class="o">&lt;&lt;</span><span class="mi">2</span><span class="p">));</span>
+    <span class="c1">//tcpCheck = tcpHeader-&gt;check;</span>
+    <span class="c1">//sport = ntohs(tcpHeader-&gt;source);</span>
+    <span class="c1">//dport = ntohs(tcpHeader-&gt;dest);</span>
+    <span class="c1">//datagram to represent the packet</span>
+    <span class="kt">char</span> <span class="n">datagram</span><span class="p">[</span><span class="mi">4096</span><span class="p">],</span> <span class="n">source_ip</span><span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="o">*</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">psuedogram</span><span class="p">;</span>
+
+    <span class="c1">//zero out the packet buffer</span>
+    <span class="n">memset</span><span class="p">(</span><span class="n">datagram</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">4096</span><span class="p">);</span>
+
+    <span class="c1">//ip header</span>
+    <span class="k">struct</span> <span class="n">iphdr</span> <span class="o">*</span><span class="n">iph</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">iphdr</span> <span class="o">*</span><span class="p">)</span> <span class="n">datagram</span><span class="p">;</span>
+
+    <span class="c1">//tcp header</span>
+    <span class="k">struct</span> <span class="n">tcphdr</span> <span class="o">*</span><span class="n">tph</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span> <span class="o">*</span><span class="p">)</span> <span class="p">(</span><span class="n">datagram</span> <span class="o">+</span> <span class="k">sizeof</span> <span class="p">(</span><span class="k">struct</span> <span class="n">iphdr</span><span class="p">));</span>
+    <span class="k">struct</span> <span class="n">sockaddr_in</span> <span class="n">sin</span><span class="p">;</span>
+    <span class="k">struct</span> <span class="n">pseudo_header</span> <span class="n">psh</span><span class="p">;</span>
+
+    <span class="c1">//data part</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">datagram</span> <span class="o">+</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">iphdr</span><span class="p">)</span> <span class="o">+</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span><span class="p">);</span>
+    <span class="n">strcpy</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="s">"ABCDEFGHIJKLMNOPQRSTUVWXYZ"</span><span class="p">);</span>
+
+    <span class="c1">//ip address</span>
+    <span class="n">strcpy</span><span class="p">(</span><span class="n">source_ip</span><span class="p">,</span><span class="n">daddr</span><span class="p">);</span>
+    <span class="n">sin</span><span class="p">.</span><span class="n">sin_family</span> <span class="o">=</span> <span class="n">AF_INET</span><span class="p">;</span>
+    <span class="n">sin</span><span class="p">.</span><span class="n">sin_port</span> <span class="o">=</span> <span class="n">htons</span><span class="p">(</span><span class="mi">80</span><span class="p">);</span>
+    <span class="n">sin</span><span class="p">.</span><span class="n">sin_addr</span><span class="p">.</span><span class="n">s_addr</span> <span class="o">=</span> <span class="n">inet_addr</span><span class="p">(</span><span class="n">saddr</span><span class="p">);</span>
+
+    <span class="c1">//fill the ip header</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">ihl</span> <span class="o">=</span> <span class="mi">5</span><span class="p">;</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">version</span> <span class="o">=</span> <span class="mi">4</span><span class="p">;</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">tos</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">tot_len</span> <span class="o">=</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">iphdr</span><span class="p">)</span> <span class="o">+</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span><span class="p">)</span> <span class="o">+</span> <span class="n">strlen</span><span class="p">(</span><span class="n">data</span><span class="p">);</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">id</span> <span class="o">=</span> <span class="n">htonl</span><span class="p">(</span><span class="mi">54321</span><span class="p">);</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">frag_off</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">ttl</span> <span class="o">=</span> <span class="mi">64</span><span class="p">;</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">protocol</span> <span class="o">=</span> <span class="n">IPPROTO_TCP</span><span class="p">;</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">check</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">saddr</span> <span class="o">=</span> <span class="n">inet_addr</span><span class="p">(</span><span class="n">source_ip</span><span class="p">);</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">daddr</span> <span class="o">=</span> <span class="n">sin</span><span class="p">.</span><span class="n">sin_addr</span><span class="p">.</span><span class="n">s_addr</span><span class="p">;</span>
+
+    <span class="c1">//ip checksum</span>
+    <span class="n">iph</span><span class="o">-&gt;</span><span class="n">check</span> <span class="o">=</span> <span class="n">csum</span><span class="p">((</span><span class="kt">unsigned</span> <span class="kt">short</span> <span class="o">*</span><span class="p">)</span> <span class="n">datagram</span><span class="p">,</span> <span class="n">iph</span><span class="o">-&gt;</span><span class="n">tot_len</span><span class="p">);</span>
+
+    <span class="c1">//TCP Header</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">source</span> <span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">dest</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">dest</span> <span class="o">=</span> <span class="n">htons</span><span class="p">(</span><span class="mi">21</span><span class="p">);</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">seq</span> <span class="o">=</span> <span class="n">random</span><span class="p">();</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">ack_seq</span> <span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">ack_seq</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">doff</span> <span class="o">=</span> <span class="mi">5</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">fin</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">syn</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">rst</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">psh</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">ack</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">urg</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">window</span> <span class="o">=</span> <span class="n">htons</span><span class="p">(</span><span class="mi">5840</span><span class="p">);</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">check</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">urg_ptr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+    <span class="c1">//tcp checksum</span>
+    <span class="n">psh</span><span class="p">.</span><span class="n">source_address</span> <span class="o">=</span> <span class="n">inet_addr</span><span class="p">(</span><span class="n">source_ip</span><span class="p">);</span>
+    <span class="n">psh</span><span class="p">.</span><span class="n">dest_address</span> <span class="o">=</span> <span class="n">sin</span><span class="p">.</span><span class="n">sin_addr</span><span class="p">.</span><span class="n">s_addr</span><span class="p">;</span>
+    <span class="n">psh</span><span class="p">.</span><span class="n">placeholder</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">psh</span><span class="p">.</span><span class="n">protocol</span> <span class="o">=</span> <span class="n">IPPROTO_TCP</span><span class="p">;</span>
+    <span class="n">psh</span><span class="p">.</span><span class="n">tcp_length</span> <span class="o">=</span> <span class="n">htons</span><span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span><span class="p">)</span> <span class="o">+</span> <span class="n">strlen</span><span class="p">(</span><span class="n">data</span><span class="p">));</span>
+
+    <span class="kt">int</span> <span class="n">psize</span> <span class="o">=</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">pseudo_header</span><span class="p">)</span> <span class="o">+</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span><span class="p">)</span> <span class="o">+</span> <span class="n">strlen</span><span class="p">(</span><span class="n">data</span><span class="p">);</span>
+    <span class="n">psuedogram</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="n">psize</span><span class="p">);</span>
+
+    <span class="n">memcpy</span><span class="p">(</span><span class="n">psuedogram</span><span class="p">,</span> <span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="p">)</span> <span class="o">&amp;</span><span class="n">psh</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">pseudo_header</span><span class="p">));</span>
+    <span class="n">memcpy</span><span class="p">(</span><span class="n">psuedogram</span> <span class="o">+</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">pseudo_header</span><span class="p">),</span> <span class="n">tph</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span><span class="p">)</span><span class="o">+</span><span class="n">strlen</span><span class="p">(</span><span class="n">data</span><span class="p">));</span>
+
+    <span class="n">tph</span><span class="o">-&gt;</span><span class="n">check</span> <span class="o">=</span> <span class="n">csum</span><span class="p">((</span><span class="kt">unsigned</span> <span class="kt">short</span> <span class="o">*</span><span class="p">)</span> <span class="n">psuedogram</span><span class="p">,</span> <span class="n">psize</span><span class="p">);</span>
+
+    <span class="c1">//IP_HDRINCL to tell kernel that headers are included in packet</span>
+    <span class="kt">int</span> <span class="n">one</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+    <span class="k">const</span> <span class="kt">int</span> <span class="o">*</span><span class="n">val</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">one</span><span class="p">;</span>
+
+    <span class="k">if</span><span class="p">(</span><span class="n">setsockopt</span> <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">IPPROTO_IP</span><span class="p">,</span> <span class="n">IP_HDRINCL</span><span class="p">,</span> <span class="n">val</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">one</span><span class="p">))</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">perror</span><span class="p">(</span><span class="s">"error seting  iphdrinlc"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="c1">//send the packet</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">sendto</span><span class="p">(</span><span class="n">s</span><span class="p">,</span><span class="n">datagram</span><span class="p">,</span> <span class="n">iph</span><span class="o">-&gt;</span><span class="n">tot_len</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="k">struct</span> <span class="n">sockaddr</span> <span class="o">*</span><span class="p">)</span> <span class="o">&amp;</span><span class="n">sin</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">sin</span><span class="p">))</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">perror</span><span class="p">(</span><span class="s">"sendto failed"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="c1">//data sent successfully</span>
+    <span class="k">else</span> <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">packet sent length:%d </span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">iph</span><span class="o">-&gt;</span><span class="n">tot_len</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="c1">//close(s);</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+
+<span class="p">}</span>
+
+<span class="c1">//function for naive-pattern matching in payload</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">pattern_match</span><span class="p">(</span><span class="k">struct</span> <span class="n">iphdr</span> <span class="o">*</span><span class="n">pIph</span><span class="p">,</span><span class="kt">void</span> <span class="o">*</span><span class="n">s</span><span class="p">,</span><span class="kt">char</span> <span class="o">*</span><span class="n">pat</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">char</span> <span class="o">*</span><span class="n">payload</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">i</span><span class="p">,</span><span class="n">j</span><span class="p">;</span>
+    <span class="n">payload</span> <span class="o">=</span> <span class="n">s</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">M</span> <span class="o">=</span> <span class="n">strlen</span><span class="p">(</span><span class="n">pat</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">Pattern length:%d, Pattern:%s"</span><span class="p">,</span><span class="n">M</span><span class="p">,</span><span class="n">pat</span><span class="p">);</span>
+    <span class="kt">unsigned</span> <span class="kt">short</span> <span class="n">tcpLen</span> <span class="o">=</span> <span class="n">ntohs</span><span class="p">(</span><span class="n">pIph</span><span class="o">-&gt;</span><span class="n">tot_len</span><span class="p">)</span> <span class="o">-</span> <span class="p">(</span><span class="n">pIph</span><span class="o">-&gt;</span><span class="n">ihl</span><span class="o">&lt;&lt;</span><span class="mi">2</span><span class="p">);</span>
+    <span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">tcpLen</span><span class="o">-</span><span class="n">M</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+        <span class="k">for</span><span class="p">(</span><span class="n">j</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">j</span><span class="o">&lt;</span><span class="n">M</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+            <span class="c1">//printf("%c|",payload[i+j]);</span>
+            <span class="c1">//printf("%c|",pat[j]);</span>
+            <span class="c1">//printf("j%d,M%d",j,M);</span>
+            <span class="k">if</span><span class="p">(</span><span class="n">j</span><span class="o">==</span><span class="n">M</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+                <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s"</span><span class="p">,</span><span class="s">"************pattern matched*****************"</span><span class="p">);</span>
+                <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+            <span class="p">}</span>
+            <span class="c1">//check single character at a time</span>
+            <span class="k">if</span><span class="p">(</span><span class="n">payload</span><span class="p">[</span><span class="n">i</span><span class="o">+</span><span class="n">j</span><span class="p">]</span><span class="o">!=</span><span class="n">pat</span><span class="p">[</span><span class="n">j</span><span class="p">])</span> <span class="p">{</span>
+                <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s"</span><span class="p">,</span><span class="s">"********pattern not matched**********"</span><span class="p">);</span>
+                <span class="k">break</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+
+<span class="c1">//callback function for conntrack query</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">ct_cb</span><span class="p">(</span><span class="k">enum</span> <span class="n">nf_conntrack_msg_type</span> <span class="n">type</span><span class="p">,</span><span class="k">struct</span> <span class="n">nf_conntrack</span> <span class="o">*</span><span class="n">ct</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">data</span><span class="p">){</span>
+	<span class="kt">char</span> <span class="n">buf</span><span class="p">[</span><span class="mi">1024</span><span class="p">];</span>
+	<span class="n">nfct_snprintf</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span><span class="k">sizeof</span><span class="p">(</span><span class="n">buf</span><span class="p">),</span><span class="n">ct</span><span class="p">,</span> <span class="n">NFCT_T_UNKNOWN</span><span class="p">,</span> <span class="n">NFCT_O_DEFAULT</span><span class="p">,</span><span class="n">NFCT_OF_SHOW_LAYER3</span><span class="p">);</span>
+	<span class="c1">//printf("\ncomes in conntrack callback..............");</span>
+	<span class="n">printf</span><span class="p">(</span><span class="s">"%s</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">buf</span><span class="p">);</span>
+	<span class="k">return</span> <span class="n">NFCT_CB_CONTINUE</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">//function to check tcp state from connection</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">connection_exists</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">saddr</span><span class="p">,</span><span class="kt">char</span> <span class="o">*</span><span class="n">daddr</span><span class="p">,</span> <span class="kt">int</span> <span class="n">protocol</span><span class="p">,</span> <span class="kt">int</span> <span class="n">sport</span><span class="p">,</span> <span class="kt">int</span> <span class="n">dport</span><span class="p">,</span><span class="kt">int</span> <span class="n">k</span><span class="p">){</span>
+    <span class="c1">//conntrack code</span>
+    <span class="kt">int</span> <span class="n">ct_ret</span><span class="p">,</span><span class="n">ct_ret2</span><span class="p">;</span>
+    <span class="n">u_int32_t</span> <span class="n">family</span> <span class="o">=</span> <span class="n">AF_INET</span><span class="p">;</span>
+    <span class="k">struct</span> <span class="n">nfct_handle</span> <span class="o">*</span><span class="n">ct_h</span><span class="p">;</span>
+    <span class="k">struct</span> <span class="n">nf_conntrack</span> <span class="o">*</span><span class="n">expected</span><span class="p">;</span>
+    <span class="c1">//struct nf_expect *exp;</span>
+    <span class="n">ct_h</span> <span class="o">=</span> <span class="n">nfct_open</span><span class="p">(</span><span class="n">CONNTRACK</span><span class="p">,</span><span class="mi">0</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">ct_h</span><span class="p">){</span>
+    	<span class="n">perror</span><span class="p">(</span><span class="s">"---------nfct_open-----"</span><span class="p">);</span>
+    	<span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span><span class="k">else</span><span class="p">{</span>
+    <span class="n">expected</span> <span class="o">=</span> <span class="n">nfct_new</span><span class="p">();</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">expected</span><span class="p">){</span>
+	<span class="n">perror</span><span class="p">(</span><span class="s">"-----nfct_new-----"</span><span class="p">);</span>
+	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="c1">//Variables to query conntrack table</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">-----conection exists variables:%s----%s----%d-----%d------%d-------%d"</span><span class="p">,</span><span class="n">saddr</span><span class="p">,</span><span class="n">daddr</span><span class="p">,</span><span class="n">sport</span><span class="p">,</span><span class="n">dport</span><span class="p">,</span><span class="n">protocol</span><span class="p">,</span><span class="n">k</span><span class="p">);</span>
+    <span class="c1">//flow based query</span>
+    <span class="n">nfct_set_attr_u8</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span><span class="n">ATTR_L3PROTO</span><span class="p">,</span><span class="n">AF_INET</span><span class="p">);</span>
+    <span class="n">nfct_set_attr_u32</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span><span class="n">ATTR_IPV4_SRC</span><span class="p">,</span><span class="n">inet_addr</span><span class="p">(</span><span class="n">saddr</span><span class="p">));</span>
+    <span class="n">nfct_set_attr_u32</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span><span class="n">ATTR_IPV4_DST</span><span class="p">,</span><span class="n">inet_addr</span><span class="p">(</span><span class="n">daddr</span><span class="p">));</span>
+    <span class="n">nfct_set_attr_u8</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span><span class="n">ATTR_L4PROTO</span><span class="p">,</span><span class="n">IPPROTO_TCP</span><span class="p">);</span>
+    <span class="n">nfct_set_attr_u16</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span><span class="n">ATTR_PORT_SRC</span><span class="p">,</span><span class="n">htons</span><span class="p">(</span><span class="n">sport</span><span class="p">));</span>
+    <span class="n">nfct_set_attr_u16</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span><span class="n">ATTR_PORT_DST</span><span class="p">,</span><span class="n">htons</span><span class="p">(</span><span class="n">dport</span><span class="p">));</span>
+    <span class="n">nfct_set_attr_u8</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span><span class="n">ATTR_TCP_STATE</span><span class="p">,</span><span class="n">k</span><span class="p">);</span>
+    <span class="n">nfct_callback_register</span><span class="p">(</span><span class="n">ct_h</span><span class="p">,</span> <span class="n">NFCT_T_ALL</span><span class="p">,</span><span class="n">ct_cb</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+    <span class="n">ct_ret</span> <span class="o">=</span> <span class="n">nfct_query</span><span class="p">(</span><span class="n">ct_h</span><span class="p">,</span><span class="n">NFCT_Q_DUMP</span><span class="p">,</span><span class="o">&amp;</span><span class="n">family</span><span class="p">);</span>
+
+    <span class="k">if</span><span class="p">(</span><span class="n">ct_ret</span> <span class="o">==</span> <span class="o">-</span><span class="mi">1</span><span class="p">){</span>
+	<span class="c1">//printf("\n(OK)\n");</span>
+	<span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">(%d)(%s)</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">ct_ret</span><span class="p">,</span><span class="n">strerror</span><span class="p">(</span><span class="n">errno</span><span class="p">));</span>
+        <span class="n">nfct_destroy</span><span class="p">(</span><span class="n">expected</span><span class="p">);</span>
+	<span class="n">nfct_callback_unregister</span><span class="p">(</span><span class="n">ct_h</span><span class="p">);</span>
+	<span class="n">nfct_close</span><span class="p">(</span><span class="n">ct_h</span><span class="p">);</span>
+	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+
+    <span class="p">}</span><span class="k">else</span><span class="p">{</span>
+	<span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">(OK)"</span><span class="p">);</span>
+        <span class="n">nfct_callback_unregister</span><span class="p">(</span><span class="n">ct_h</span><span class="p">);</span>
+        <span class="n">nfct_callback_register</span><span class="p">(</span><span class="n">ct_h</span><span class="p">,</span> <span class="n">NFCT_T_ALL</span><span class="p">,</span><span class="n">ct_cb</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+        <span class="n">ct_ret2</span> <span class="o">=</span> <span class="n">nfct_query</span><span class="p">(</span><span class="n">ct_h</span><span class="p">,</span><span class="n">NFCT_Q_GET</span><span class="p">,</span><span class="n">expected</span><span class="p">);</span>
+        <span class="c1">//printf("\n------ct_ret2------:%d",ct_ret2);</span>
+        <span class="c1">//printf("\nTEST:get conntrack:%d",k);</span>
+        <span class="c1">//exit(EXIT_FAILURE);</span>
+        <span class="n">nfct_destroy</span><span class="p">(</span><span class="n">expected</span><span class="p">);</span>
+	<span class="n">nfct_callback_unregister</span><span class="p">(</span><span class="n">ct_h</span><span class="p">);</span>
+	<span class="n">nfct_close</span><span class="p">(</span><span class="n">ct_h</span><span class="p">);</span>
+	<span class="k">return</span> <span class="n">ct_ret2</span><span class="p">;</span>    
+    <span class="p">}</span>
+	<span class="n">nfct_destroy</span><span class="p">(</span><span class="n">expected</span><span class="p">);</span>
+	<span class="n">nfct_callback_unregister</span><span class="p">(</span><span class="n">ct_h</span><span class="p">);</span>
+	<span class="n">nfct_close</span><span class="p">(</span><span class="n">ct_h</span><span class="p">);</span>    
+	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+     <span class="p">}</span><span class="c1">//conntrack code ends</span>
+<span class="p">}</span>
+
+
+<span class="c1">//function to perform linear search through rules array</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">linear_search</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">saddr</span><span class="p">,</span><span class="kt">char</span> <span class="o">*</span><span class="n">daddr</span><span class="p">,</span> <span class="kt">int</span> <span class="n">protocol</span><span class="p">,</span> <span class="kt">int</span> <span class="n">sport</span><span class="p">,</span> <span class="kt">int</span> <span class="n">dport</span><span class="p">,</span> <span class="n">u_int8_t</span> <span class="n">flag_type</span><span class="p">,</span> <span class="kt">int</span> <span class="n">payload_len</span><span class="p">,</span> <span class="k">struct</span> <span class="n">iphdr</span> <span class="o">*</span><span class="n">pIph</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="kt">char</span> <span class="o">*</span><span class="n">pd</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">flow to match in rules array table"</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"%s	%s	%d	%d	%d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">saddr</span><span class="p">,</span><span class="n">daddr</span><span class="p">,</span><span class="n">sport</span><span class="p">,</span><span class="n">dport</span><span class="p">,</span><span class="n">protocol</span><span class="p">);</span>
+
+    <span class="cm">/*FILE *f = fopen("matches.txt","a");
+    FILE *f2 = fopen("flowlog.txt","a");
+    if(f == NULL &amp;&amp; f2 == NULL) {
+        printf("\nerror opening file");
+        exit(1);
+    }*/</span>
+
+    <span class="kt">int</span> <span class="n">ret2</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">ret3</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">t</span><span class="p">;</span>
+    <span class="kt">void</span> <span class="o">*</span><span class="n">s</span><span class="p">;</span>
+
+    <span class="n">printf</span><span class="p">(</span><span class="s">"size of rules:%d"</span><span class="p">,</span><span class="n">rule_count</span><span class="p">);</span>
+    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">rule_count</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="c1">//step: compare source ip addresses</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s - %s - %s</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="s">"compare source ips"</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">s_addr</span><span class="p">,</span> <span class="n">saddr</span><span class="p">);</span>
+        <span class="n">ret2</span> <span class="o">=</span> <span class="n">compare_ips</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">s_addr</span><span class="p">,</span><span class="n">saddr</span><span class="p">);</span>
+        <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">ret2</span><span class="p">)</span> <span class="k">continue</span><span class="p">;</span>
+        <span class="k">else</span> <span class="p">{</span>
+	    <span class="c1">//step: compare destination ip addresses</span>
+            <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s - %s - %s</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="s">"compare dest ips"</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">d_addr</span><span class="p">,</span> <span class="n">daddr</span><span class="p">);</span>
+            <span class="n">ret3</span> <span class="o">=</span> <span class="n">compare_ips</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">d_addr</span><span class="p">,</span><span class="n">daddr</span><span class="p">);</span>
+            <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">ret3</span><span class="p">)</span> <span class="k">continue</span><span class="p">;</span>
+            <span class="kt">int</span> <span class="n">proto_flag</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+            <span class="kt">int</span> <span class="n">state_flag</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+            <span class="c1">//step: switch based on protocol</span>
+            <span class="k">switch</span><span class="p">(</span><span class="n">protocol</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">case</span> <span class="n">ICMP</span><span class="p">:</span>
+                <span class="k">if</span><span class="p">((</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">proto</span><span class="p">,</span><span class="s">"ICMP"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">atoi</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">flags</span><span class="p">)</span> <span class="o">==</span> <span class="n">flag_type</span><span class="p">))</span> <span class="p">{</span>
+                    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">icmp-type%d"</span><span class="p">,</span><span class="n">flag_type</span><span class="p">);</span>
+                    <span class="n">proto_flag</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+                    <span class="k">goto</span> <span class="n">check</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="k">case</span> <span class="n">TCP</span><span class="p">:</span>
+                <span class="k">if</span><span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">proto</span><span class="p">,</span><span class="s">"TCP"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+		    <span class="k">struct</span> <span class="n">tcphdr</span> <span class="o">*</span><span class="n">tcpHeader</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span> <span class="o">*</span><span class="p">)(</span><span class="n">pd</span> <span class="o">+</span> <span class="p">(</span><span class="n">pIph</span><span class="o">-&gt;</span><span class="n">ihl</span><span class="o">&lt;&lt;</span><span class="mi">2</span><span class="p">));</span>
+		    <span class="n">s</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="p">)</span><span class="n">tcpHeader</span> <span class="o">+</span> <span class="mi">4</span><span class="o">*</span><span class="p">(</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">doff</span><span class="p">);</span>
+		    <span class="c1">//printf("\natoi(rules[j].flags)=%d",atoi(rules[j].flags));</span>
+                    <span class="k">if</span><span class="p">(</span><span class="n">atoi</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">flags</span><span class="p">)</span> <span class="o">==</span> <span class="n">flag_type</span> <span class="o">||</span> <span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">flags</span><span class="p">,</span><span class="s">"all"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">))</span> <span class="p">{</span>
+                        <span class="n">proto_flag</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+                        <span class="c1">//printf("\n%s","check TCP");</span>
+                    <span class="p">}</span>
+                    <span class="k">goto</span> <span class="n">check</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="k">case</span> <span class="n">UDP</span><span class="p">:</span>
+                <span class="k">if</span><span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">proto</span><span class="p">,</span><span class="s">"UDP"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="n">proto_flag</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+                    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s"</span><span class="p">,</span><span class="s">"check UDP"</span><span class="p">);</span>
+                    <span class="k">goto</span> <span class="n">check</span><span class="p">;</span>
+                <span class="p">}</span>
+            <span class="nl">default:</span>
+                <span class="k">if</span><span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">proto</span><span class="p">,</span><span class="s">"all"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+                    <span class="n">proto_flag</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+                    <span class="c1">//printf("\n%s","in default");</span>
+                <span class="p">}</span> <span class="k">else</span> <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">Unrecognized Protocol:%d"</span><span class="p">,</span><span class="n">protocol</span><span class="p">);</span>
+<span class="nl">check:</span>
+                <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">proto_flag</span><span class="p">)</span> <span class="k">continue</span><span class="p">;</span><span class="c1">// protocol mismatch, move on to next packet</span>
+                <span class="kt">int</span> <span class="n">port_flag</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+                <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">**********port ranges******%s -%s, %s-%s"</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">s_port_start</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">s_port_end</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">d_port_start</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">d_port_end</span><span class="p">);</span>
+
+		<span class="c1">//step: compare port numbers</span>
+                <span class="k">if</span> <span class="p">(((((</span><span class="n">sport</span> <span class="o">&gt;=</span> <span class="n">atoi</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">s_port_start</span><span class="p">))</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">sport</span> <span class="o">&lt;=</span> <span class="n">atoi</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">s_port_end</span><span class="p">)))</span> <span class="o">||</span> <span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">s_port_start</span><span class="p">,</span><span class="s">"all"</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span> <span class="o">&amp;&amp;</span> <span class="p">(((</span><span class="n">dport</span> <span class="o">&lt;=</span> <span class="n">atoi</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">d_port_end</span><span class="p">))</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">dport</span> <span class="o">&gt;=</span> <span class="n">atoi</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">d_port_start</span><span class="p">)))</span> <span class="o">||</span> <span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">d_port_start</span><span class="p">,</span><span class="s">"all"</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))))</span> <span class="p">{</span>
+                    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s"</span><span class="p">,</span><span class="s">"@@@@@@@*********success PACKET MATCH**********@@@@@@@"</span><span class="p">);</span>
+
+                    <span class="c1">//step: check rule action, if accept</span>
+                    <span class="k">if</span><span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">action</span><span class="p">,</span><span class="s">"NF_ACCEPT"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+
+		       <span class="c1">//check if pattern defined for the rule                        </span>
+			<span class="k">if</span><span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">signature</span><span class="p">,</span><span class="s">"none"</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">proto</span><span class="p">,</span><span class="s">"TCP"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">signature_action</span><span class="p">,</span><span class="s">"NF_DROP"</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+                            <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s"</span><span class="p">,</span><span class="s">"*******check pattern********"</span><span class="p">);</span>
+                            <span class="n">t</span><span class="o">=</span><span class="n">pattern_match</span><span class="p">(</span><span class="n">pIph</span><span class="p">,</span><span class="n">s</span><span class="p">,</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">signature</span><span class="p">);</span>
+                            <span class="c1">//check if pattern matched</span>
+                            <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">t</span><span class="p">)</span> <span class="p">{</span>
+                                <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">%s"</span><span class="p">,</span><span class="s">"Pattern matched"</span><span class="p">);</span>
+                                <span class="c1">//send_tcp_rst(saddr,daddr,protocol,sport,dport, pIph, pd);</span>
+                                <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+                            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                                <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+                            <span class="p">}</span>
+			<span class="c1">//check if rule is stateful</span>
+                        <span class="p">}</span> <span class="k">else</span> <span class="k">if</span><span class="p">(</span><span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">stateful</span><span class="p">,</span><span class="s">"yes"</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">strcmp</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">proto</span><span class="p">,</span><span class="s">"TCP"</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">){</span>
+				    <span class="kt">int</span> <span class="n">ct_ret</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>				   
+				    <span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="n">atoi</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">states</span><span class="p">[</span><span class="mi">0</span><span class="p">]);</span><span class="n">k</span><span class="o">&lt;</span><span class="n">atoi</span><span class="p">(</span><span class="n">rules</span><span class="p">[</span><span class="n">j</span><span class="p">].</span><span class="n">states</span><span class="p">[</span><span class="mi">1</span><span class="p">]);</span><span class="n">k</span><span class="o">++</span><span class="p">){</span>
+					<span class="n">ct_ret</span> <span class="o">=</span> <span class="n">connection_exists</span><span class="p">(</span><span class="n">saddr</span><span class="p">,</span><span class="n">daddr</span><span class="p">,</span><span class="n">protocol</span><span class="p">,</span><span class="n">sport</span><span class="p">,</span><span class="n">dport</span><span class="p">,</span><span class="n">k</span><span class="p">);</span>
+					<span class="k">if</span> <span class="p">(</span><span class="n">ct_ret</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="k">return</span> <span class="mi">1</span><span class="p">;</span><span class="c1">//flow match i conntrack table</span>
+					<span class="k">else</span> <span class="k">if</span><span class="p">(</span><span class="n">ct_ret</span> <span class="o">==</span> <span class="o">-</span><span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="n">k</span><span class="o">==</span><span class="mi">9</span><span class="p">)</span> <span class="k">return</span> <span class="mi">1</span><span class="p">;</span><span class="c1">//new connection</span>
+					<span class="k">else</span> <span class="k">continue</span><span class="p">;</span>
+				    <span class="p">}</span>				    
+			<span class="p">}</span><span class="k">else</span> <span class="p">{</span>
+                            <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">*****rule match:%d*********"</span><span class="p">,</span><span class="n">j</span><span class="o">+</span><span class="mi">1</span><span class="p">);</span>
+                            <span class="c1">//write to file</span>
+                            <span class="n">printf</span><span class="p">(</span><span class="s">"%d	%s	%s	%d	%d	%d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">j</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span><span class="n">saddr</span><span class="p">,</span><span class="n">daddr</span><span class="p">,</span><span class="n">sport</span><span class="p">,</span><span class="n">dport</span><span class="p">,</span><span class="n">protocol</span><span class="p">);</span>
+                            <span class="c1">//fprintf(f2,"%d %d\n",j+1,payload_len);</span>
+                            <span class="c1">//fclose(f2);</span>
+                            <span class="c1">//fclose(f);</span>
+                            <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+                        <span class="p">}</span>
+                    <span class="p">}</span>
+                    <span class="k">else</span> <span class="p">{</span>
+                        <span class="n">printf</span><span class="p">(</span><span class="s">"%s"</span><span class="p">,</span><span class="s">"******packet dropped1*********"</span><span class="p">);</span>
+                        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+                    <span class="p">}</span>
+                <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+                    <span class="c1">//printf("\nports not matched:%d.........%d",sport,dport);</span>
+                    <span class="k">continue</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="n">printf</span><span class="p">(</span><span class="s">"%s"</span><span class="p">,</span><span class="s">"******packet dropped2*********"</span><span class="p">);</span>
+            <span class="p">}</span>
+            <span class="n">printf</span><span class="p">(</span><span class="s">"%s"</span><span class="p">,</span><span class="s">"******packet dropped3*********"</span><span class="p">);</span>
+        <span class="p">}</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">"%s"</span><span class="p">,</span><span class="s">"******packet dropped4*********"</span><span class="p">);</span>
+        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"%s"</span><span class="p">,</span><span class="s">"******packet dropped5*********"</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="c1">//callback function called whenever a packet is queued</span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">cb</span><span class="p">(</span><span class="k">struct</span> <span class="n">nfq_q_handle</span> <span class="o">*</span><span class="n">qh</span><span class="p">,</span><span class="k">struct</span> <span class="n">nfgenmsg</span> <span class="o">*</span><span class="n">nfmsg</span><span class="p">,</span> <span class="k">struct</span> <span class="n">nfq_data</span> <span class="o">*</span><span class="n">nfa</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="c1">//printf("entering callback\n");</span>
+    <span class="n">u_int32_t</span> <span class="n">id</span><span class="p">,</span> <span class="n">mark</span><span class="p">,</span> <span class="n">ifi</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">ret</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">payload_len</span><span class="p">,</span> <span class="n">tcp_flags</span><span class="p">[</span><span class="mi">8</span><span class="p">];</span>
+    <span class="kt">unsigned</span> <span class="kt">char</span> <span class="o">*</span><span class="n">data1</span><span class="p">;</span>
+    <span class="kt">unsigned</span> <span class="kt">char</span> <span class="o">*</span><span class="n">packet</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+
+    <span class="k">struct</span> <span class="n">nfqnl_msg_packet_hdr</span> <span class="o">*</span><span class="n">ph</span><span class="p">;</span>
+    <span class="k">struct</span> <span class="n">nfqnl_msg_packet_hw</span> <span class="o">*</span><span class="n">hwph</span><span class="p">;</span>
+
+    <span class="k">struct</span> <span class="n">iphdr</span> <span class="o">*</span><span class="n">ipHeader</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+    <span class="k">struct</span> <span class="n">tcphdr</span> <span class="o">*</span><span class="n">tcpHeader</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+    <span class="k">struct</span> <span class="n">udphdr</span> <span class="o">*</span><span class="n">udpHeader</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+    <span class="k">struct</span> <span class="n">icmphdr</span> <span class="o">*</span><span class="n">icmpHeader</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+
+    <span class="kt">unsigned</span> <span class="kt">short</span> <span class="n">ipCheck</span><span class="p">,</span> <span class="n">udpCheck</span><span class="p">,</span> <span class="n">tcpCheck</span><span class="p">,</span><span class="n">sport</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="n">dport</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>
+    <span class="kt">unsigned</span> <span class="kt">char</span> <span class="o">*</span><span class="n">payloadData</span><span class="p">;</span>
+    <span class="kt">char</span> <span class="n">saddr</span><span class="p">[</span><span class="n">INET_ADDRSTRLEN</span><span class="p">],</span><span class="n">daddr</span><span class="p">[</span><span class="n">INET_ADDRSTRLEN</span><span class="p">];</span>
+
+    <span class="n">payload_len</span> <span class="o">=</span> <span class="n">nfq_get_payload</span><span class="p">(</span><span class="n">nfa</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">payloadData</span><span class="p">);</span>
+    <span class="c1">//printf("ip datagram len= %d", payload_len);</span>
+
+    <span class="n">ipHeader</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">iphdr</span><span class="o">*</span><span class="p">)</span><span class="n">payloadData</span><span class="p">;</span>
+    <span class="n">ipCheck</span> <span class="o">=</span> <span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">check</span><span class="p">;</span>
+    <span class="n">u_int8_t</span> <span class="n">flag_type</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+    <span class="c1">//print ip headers</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"ip payload length: %d-----%s"</span> <span class="p">,</span><span class="n">payload_len</span><span class="p">,</span><span class="n">payloadData</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">ip header protocol=%d"</span><span class="p">,</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">protocol</span><span class="p">);</span>
+    <span class="n">fprintf</span><span class="p">(</span><span class="n">stdout</span><span class="p">,</span> <span class="s">"</span><span class="se">\n</span><span class="s">IP{v=%u; ihl=%u; tos=%u; tot_len=%u; id=%u; ttl=%u; protocol=%u;"</span><span class="p">,</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">version</span><span class="p">,</span> <span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">ihl</span><span class="o">*</span><span class="mi">4</span><span class="p">,</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">tos</span><span class="p">,</span> <span class="n">ntohs</span><span class="p">(</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">tot_len</span><span class="p">),</span><span class="n">ntohs</span><span class="p">(</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">id</span><span class="p">),</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">ttl</span><span class="p">,</span> <span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">protocol</span><span class="p">);</span>
+
+    <span class="c1">//convert ip address to string format</span>
+    <span class="n">inet_ntop</span><span class="p">(</span><span class="n">AF_INET</span><span class="p">,</span><span class="o">&amp;</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">saddr</span><span class="p">,</span><span class="n">saddr</span><span class="p">,</span><span class="n">INET_ADDRSTRLEN</span><span class="p">);</span>
+    <span class="n">fprintf</span><span class="p">(</span><span class="n">stdout</span><span class="p">,</span><span class="s">"saddr=%s;"</span><span class="p">,</span><span class="n">saddr</span><span class="p">);</span>
+    <span class="n">inet_ntop</span><span class="p">(</span><span class="n">AF_INET</span><span class="p">,</span><span class="o">&amp;</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">daddr</span><span class="p">,</span><span class="n">daddr</span><span class="p">,</span><span class="n">INET_ADDRSTRLEN</span><span class="p">);</span>
+    <span class="n">fprintf</span><span class="p">(</span><span class="n">stdout</span><span class="p">,</span> <span class="s">"daddr=%s}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">daddr</span><span class="p">);</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">source ip-dest ip:%s-%s"</span><span class="p">,</span><span class="n">saddr</span><span class="p">,</span><span class="n">daddr</span><span class="p">);</span>
+
+    <span class="k">switch</span><span class="p">(</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">protocol</span><span class="p">){</span>
+	<span class="k">case</span> <span class="n">TCP</span><span class="p">:</span>	<span class="n">tcpHeader</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">tcphdr</span> <span class="o">*</span><span class="p">)(</span><span class="n">payloadData</span> <span class="o">+</span> <span class="p">(</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">ihl</span><span class="o">&lt;&lt;</span><span class="mi">2</span><span class="p">));</span>
+			<span class="n">tcpCheck</span> <span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">check</span><span class="p">;</span>
+			<span class="n">sport</span> <span class="o">=</span> <span class="n">ntohs</span><span class="p">(</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">source</span><span class="p">);</span>
+			<span class="n">dport</span> <span class="o">=</span> <span class="n">ntohs</span><span class="p">(</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">dest</span><span class="p">);</span>
+			<span class="n">tcp_flags</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">urg</span><span class="p">;</span>
+			<span class="n">tcp_flags</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">ack</span><span class="p">;</span>
+			<span class="n">tcp_flags</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">psh</span><span class="p">;</span>
+			<span class="n">tcp_flags</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">rst</span><span class="p">;</span>
+			<span class="n">tcp_flags</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">syn</span><span class="p">;</span>
+			<span class="n">tcp_flags</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span><span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">fin</span><span class="p">;</span>
+			<span class="n">tcp_flags</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span><span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">ece</span><span class="p">;</span>
+			<span class="n">tcp_flags</span><span class="p">[</span><span class="mi">7</span><span class="p">]</span><span class="o">=</span> <span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">cwr</span><span class="p">;</span>
+			<span class="n">u_int8_t</span> <span class="n">listed</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+			<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="mi">8</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+			    <span class="n">listed</span> <span class="o">+=</span> <span class="p">(</span><span class="n">tcp_flags</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="n">k</span><span class="p">);</span>
+			<span class="p">}</span>
+			<span class="n">flag_type</span> <span class="o">=</span> <span class="n">listed</span><span class="p">;</span>
+			<span class="n">printf</span><span class="p">(</span><span class="s">"th_flags:%d"</span><span class="p">,</span><span class="n">flag_type</span><span class="p">);</span>
+			<span class="c1">//printf("tcp checksum: %04x", tcpHeader-&gt;check);</span>
+			<span class="n">fprintf</span><span class="p">(</span><span class="n">stdout</span><span class="p">,</span> <span class="s">"TCP{sport=%u; dport=%u; seq=%u; ack_seq=%u; flags=u%ua%up%ur%us%uf%u; window=%u; urg=%u}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">ntohs</span><span class="p">(</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">source</span><span class="p">),</span><span class="n">ntohs</span><span class="p">(</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">dest</span><span class="p">),</span><span class="n">ntohl</span><span class="p">(</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">seq</span><span class="p">),</span><span class="n">ntohl</span><span class="p">(</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">ack_seq</span><span class="p">),</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">urg</span><span class="p">,</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">ack</span><span class="p">,</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">psh</span><span class="p">,</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">rst</span><span class="p">,</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">syn</span><span class="p">,</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">fin</span><span class="p">,</span><span class="n">ntohs</span><span class="p">(</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">window</span><span class="p">),</span><span class="n">tcpHeader</span><span class="o">-&gt;</span><span class="n">urg_ptr</span><span class="p">);</span>
+			<span class="k">break</span><span class="p">;</span>
+	<span class="k">case</span> <span class="n">UDP</span><span class="p">:</span>	<span class="n">udpHeader</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">udphdr</span> <span class="o">*</span><span class="p">)(</span><span class="n">payloadData</span> <span class="o">+</span> <span class="p">(</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">ihl</span><span class="o">&lt;&lt;</span><span class="mi">2</span><span class="p">));</span>
+			<span class="n">udpCheck</span> <span class="o">=</span> <span class="n">udpHeader</span><span class="o">-&gt;</span><span class="n">check</span><span class="p">;</span>
+			<span class="n">sport</span> <span class="o">=</span> <span class="n">udpHeader</span><span class="o">-&gt;</span><span class="n">source</span><span class="p">;</span>
+			<span class="n">dport</span> <span class="o">=</span> <span class="n">udpHeader</span><span class="o">-&gt;</span><span class="n">dest</span><span class="p">;</span>
+			<span class="c1">//printf("udp checksum:%04x", udpHeader-&gt;check);</span>
+			<span class="c1">//fprintf(stdout, "UDP{sport=%u,dport=%u;len=%u}\n",ntohs(udpHeader-&gt;source), ntohs(udpHeader-&gt;dest),udpHeader-&gt;len);</span>
+			<span class="k">break</span><span class="p">;</span>
+	<span class="k">case</span> <span class="n">ICMP</span><span class="p">:</span>  	<span class="n">icmpHeader</span> <span class="o">=</span> <span class="p">(</span><span class="k">struct</span> <span class="n">icmphdr</span> <span class="o">*</span><span class="p">)(</span><span class="n">payloadData</span> <span class="o">+</span> <span class="p">(</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">ihl</span><span class="o">&lt;&lt;</span><span class="mi">2</span><span class="p">));</span>
+ 		       	<span class="n">flag_type</span> <span class="o">=</span> <span class="n">icmpHeader</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">;</span>
+        		<span class="n">printf</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">******ICMP Header type*******************%d"</span><span class="p">,</span><span class="mi">8</span><span class="p">);</span>
+			<span class="k">break</span><span class="p">;</span>
+	<span class="nl">default:</span><span class="k">return</span> <span class="mi">0</span><span class="p">;</span>    
+	<span class="p">}</span>
+    <span class="c1">//returns the metadataheader that wraps the packet</span>
+    <span class="n">ph</span> <span class="o">=</span> <span class="n">nfq_get_msg_packet_hdr</span><span class="p">(</span><span class="n">nfa</span><span class="p">);</span>
+    <span class="c1">//unique id of packet in queue</span>
+    <span class="n">id</span> <span class="o">=</span> <span class="n">ntohl</span><span class="p">(</span><span class="n">ph</span><span class="o">-&gt;</span><span class="n">packet_id</span><span class="p">);</span>
+    <span class="c1">//printf("hw_protocol=0x%04x hook=%u id=%u ", ntohs(ph-&gt;hw_protocol), ph-&gt;hook, id);</span>
+
+    <span class="c1">//function to perform linear search</span>
+    <span class="kt">int</span> <span class="n">ret4</span><span class="o">=</span><span class="n">linear_search</span><span class="p">(</span><span class="n">saddr</span><span class="p">,</span><span class="n">daddr</span><span class="p">,</span><span class="n">ipHeader</span><span class="o">-&gt;</span><span class="n">protocol</span><span class="p">,</span><span class="n">sport</span><span class="p">,</span><span class="n">dport</span><span class="p">,</span><span class="n">flag_type</span><span class="p">,</span><span class="n">payload_len</span><span class="p">,</span><span class="n">ipHeader</span><span class="p">,</span><span class="n">payloadData</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">ret4</span><span class="p">)</span>
+	<span class="c1">//default policy to drop packets</span>
+        <span class="k">return</span> <span class="n">nfq_set_verdict</span><span class="p">(</span><span class="n">qh</span><span class="p">,</span> <span class="n">id</span><span class="p">,</span><span class="n">NF_DROP</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span>
+    <span class="k">else</span>
+        <span class="k">return</span> <span class="n">nfq_set_verdict</span><span class="p">(</span><span class="n">qh</span><span class="p">,</span> <span class="n">id</span><span class="p">,</span> <span class="n">NF_ACCEPT</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+
+    <span class="c1">//check if tcp/syn</span>
+    <span class="n">fputc</span><span class="p">(</span><span class="sc">'\n'</span><span class="p">,</span> <span class="n">stdout</span><span class="p">);</span>
+    <span class="c1">//set verdict -- set rule action</span>
+    <span class="k">return</span> <span class="n">nfq_set_verdict</span><span class="p">(</span><span class="n">qh</span><span class="p">,</span> <span class="n">id</span><span class="p">,</span><span class="n">NF_DROP</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span>
+<span class="p">{</span>    
+    <span class="k">struct</span> <span class="n">nfq_handle</span> <span class="o">*</span><span class="n">h</span><span class="p">;</span>
+    <span class="k">struct</span> <span class="n">nfq_q_handle</span> <span class="o">*</span><span class="n">qh</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">fd</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">rv</span><span class="p">;</span>
+
+    <span class="kt">char</span> <span class="n">buf</span><span class="p">[</span><span class="mi">4096</span><span class="p">]</span> <span class="n">__attribute__</span><span class="p">((</span><span class="n">aligned</span><span class="p">));</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"opening library handle</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">read_rules</span><span class="p">())</span> <span class="p">{</span>
+        <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span> <span class="s">"no rules set to process packets"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="n">h</span> <span class="o">=</span> <span class="n">nfq_open</span><span class="p">();</span>
+    <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">h</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span> <span class="s">"error during nfq_open()</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="n">printf</span><span class="p">(</span><span class="s">"unbinding existing nfqueue</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">nfq_unbind_pf</span><span class="p">(</span><span class="n">h</span><span class="p">,</span><span class="n">AF_INET</span><span class="p">)</span> <span class="o">&lt;</span><span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span> <span class="s">"error during nfq_bind_pf()</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="n">printf</span><span class="p">(</span><span class="s">"binding nfnetlink '0'</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">nfq_bind_pf</span><span class="p">(</span><span class="n">h</span><span class="p">,</span><span class="n">AF_INET</span><span class="p">)</span> <span class="o">&lt;</span><span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span> <span class="s">"error during nfq_bind_pf()</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="n">printf</span><span class="p">(</span><span class="s">"binding this socket to queue '0'</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="n">qh</span> <span class="o">=</span> <span class="n">nfq_create_queue</span><span class="p">(</span><span class="n">h</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="o">&amp;</span><span class="n">cb</span><span class="p">,</span><span class="nb">NULL</span><span class="p">);</span>
+    <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">qh</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span><span class="s">"error during nfq_create_queue()</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"setting copy_packet mode </span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">nfq_set_mode</span><span class="p">(</span><span class="n">qh</span><span class="p">,</span><span class="n">NFQNL_COPY_PACKET</span><span class="p">,</span> <span class="mh">0xffff</span><span class="p">)</span><span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">fprintf</span><span class="p">(</span><span class="n">stderr</span><span class="p">,</span> <span class="s">"cant set packet_copy mode </span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"nfq_fd"</span><span class="p">);</span>
+    <span class="n">fd</span> <span class="o">=</span> <span class="n">nfq_fd</span><span class="p">(</span><span class="n">h</span><span class="p">);</span>
+
+    <span class="k">while</span><span class="p">((</span><span class="n">rv</span> <span class="o">=</span> <span class="n">recv</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span><span class="n">buf</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">buf</span><span class="p">),</span><span class="mi">0</span><span class="p">)))</span>
+    <span class="p">{</span>
+        <span class="c1">//printf("pkt received\n");</span>
+        <span class="n">nfq_handle_packet</span><span class="p">(</span><span class="n">h</span><span class="p">,</span><span class="n">buf</span><span class="p">,</span><span class="n">rv</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"unbinding from queue 0</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="n">nfq_destroy_queue</span><span class="p">(</span><span class="n">qh</span><span class="p">);</span>
+
+<span class="cp">#ifdef INSANE
+</span>
+    <span class="n">printf</span><span class="p">(</span><span class="s">"unbinding from AF_INET</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="n">nfq_unbind_pf</span><span class="p">(</span><span class="n">h</span><span class="p">,</span><span class="n">AF_INET</span><span class="p">);</span>
+<span class="cp">#endif
+</span>    <span class="n">printf</span><span class="p">(</span><span class="s">"closing library handle</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+    <span class="n">nfq_close</span><span class="p">(</span><span class="n">h</span><span class="p">);</span>
+
+    <span class="n">exit</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+
+<span class="p">}</span></code></pre></figure>
+
+:ET
